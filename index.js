@@ -220,6 +220,7 @@ app.post('/block', (req, res) => {
         res.send("Input limit exceeded for Story! Input less than 250 words/500 characters.")
     }
 
+    // Hex encoded Ascii string for story
     starData.star.story = new Buffer(req.body.star.story).toString('hex')
 
     if(req.body.address == addr){
