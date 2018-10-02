@@ -23,11 +23,14 @@ let blockChain = []
 
 // addr stores address
 var addr = ""
+
 // response is used to facilitate request validation
 var response;
-// check is a temporary variable to check if signature verified on time
-var check = false
 
+// temporary variables to check window timeout
+var check = false
+var messageSignature
+var loopCheck = false
 
 // for using json in http POST request
 app.use(express.json())
@@ -132,21 +135,38 @@ app.post('/requestValidation', (req, res) => {
         res.status(400).send("Please input a valid data!")
         return
     }
+    if(loopCheck == false){// check if loop executed before timeout
+        addr = addressInput.address
 
-    addr = addressInput.address
+        response = {
+            "address":addr,
+            "requestTimeStamp":new Date().getTime().toString().slice(0,-3),
+            "message":`${addr}:${new Date().getTime().toString().slice(0,-3)}:starRegistery`,
+            "validationWindow":"300"
+        }
+        
+        res.send(response)
 
-    response = {
-        "address":addr,
-        "requestTimeStamp":new Date().getTime().toString().slice(0,-3),
-        "message":`${addr}:${new Date().getTime().toString().slice(0,-3)}:starRegistery`,
-        "validationWindow":"300"
-     }
+    }else{
 
-     res.send(response)
-
-     setTimeout(() => {// validationWindow for 5 minutes
-         if(!check)
-            addr="null"}, 300000)
+        var repeatResponse = {
+            "address":response.address,
+            "requestTimeStamp":response.requestTimeStamp,
+            "message":response.message,
+            "validationWindow":300 - (new Date().getTime().toString().slice(0,-3)-response.requestTimeStamp)
+        }
+        res.send(repeatResponse)
+    }
+    
+    if(loopCheck == false){// check if previous timeout is complete
+        loopCheck = true
+        setTimeout(() => 
+                {// validationWindow for 5 minutes
+                    if(!check)
+                        addr="null"     
+                    loopCheck = false}
+                , 300000)
+    }
      
 })
 
@@ -169,10 +189,12 @@ app.post('/message-signature/validate', (req,res) => {
     }else if(payload.address == addr){// check if address matches with the request placed
         var status = bitcoinMessage.verify(response['message'],addr,payload.signature)// verification process
         if(status){
-            var messageSignature = 'valid'
+            messageSignature = 'valid'
             check = true 
+            loopCheck = false
         }else{
-            var messageSignature = 'Invalid'
+            messageSignature = 'Invalid'
+            loopCheck = false
         }
 
         var verify = {
@@ -181,7 +203,7 @@ app.post('/message-signature/validate', (req,res) => {
                         "address": addr,
                         "requestTimeStamp": response['requestTimeStamp'],
                         "message": response['message'],
-                        "validationWindow": new Date().getTime().toString().slice(0,-3) - response['requestTimeStamp'],
+                        "validationWindow": 300 - (new Date().getTime().toString().slice(0,-3) - response['requestTimeStamp']),
                         "messageSignature": messageSignature
                         }
                     }
@@ -202,50 +224,62 @@ app.post('/block', (req, res) => {
     }else if(addr == "null"){
         res.send("Timeout! Restart the process.")
         return
-    }
+    }else if(messageSignature == 'Invalid'){
+        res.send("Your signature submitted was invalid!")
+        return
+    }else{
     
-    const starData = {
-        address:req.body.address,
-        star:{
-            dec:req.body.star.dec,
-            ra:req.body.star.ra,
-            story:req.body.star.story
+        const starData = {
+            address:req.body.address,
+            star:{
+                dec:req.body.star.dec,
+                ra:req.body.star.ra,
+                story:req.body.star.story
+                }
+            }
+        
+        if(!req.body.address || !req.body.star.dec || !req.body.star.ra || !req.body.star.story){
+            res.status(400).send("Please input a valid data!")
+            return
+        }else if(req.body.star.story.length > 500){
+            res.send("Input limit exceeded for Story! Input less than 250 words/500 characters.")
+        }
+
+        var storyEncode = new Buffer(req.body.star.story).toString('hex')
+        var starRegister = {
+            address:starData.address,
+            star:{
+                dec:starData.star.dec,
+                ra:starData.star.ra,
+                story:storyEncode,
+                storyDecoded:starData.star.story
             }
         }
-    
-    if(!req.body.address || !req.body.star.dec || !req.body.star.ra || !req.body.star.story){
-        res.status(400).send("Please input a valid data!")
-        return
-    }else if(req.body.star.story.length > 500){
-        res.send("Input limit exceeded for Story! Input less than 250 words/500 characters.")
-    }
 
-    // Hex encoded Ascii string for story
-    starData.star.story = new Buffer(req.body.star.story).toString('hex')
-
-    if(req.body.address == addr){
-        // get key from db2 
-        db2.get('key', function(err, value){
-        // check if there is a genesis block
-            if(!value){
-                new Block(starData)
-                setTimeout(() => {new Block(starData)}, 1000)
-                        
-                setTimeout(() => {res.send(chain[chain.length-1])}, 2000)
-
-                addr = "" // reset address after star is registered
-                }else{
-                    // adding new block if there is a genesis block already present in the chain
-                    new Block(starData)
-                    // simple timeout to manage asynchronous activity
-                    setTimeout(() => res.send(chain[chain.length-1]), 1000)
+        if(req.body.address == addr){
+            // get key from db2 
+            db2.get('key', function(err, value){
+            // check if there is a genesis block
+                if(!value){
+                    new Block(starRegister)
+                    setTimeout(() => {new Block(starRegister)}, 1000)
+                            
+                    setTimeout(() => {res.send(chain[chain.length-1])}, 2000)
 
                     addr = "" // reset address after star is registered
-                }
-        })
-    }else{
-        res.send("Address is not verified! Check again.")
-    }        
+                    }else{
+                        // adding new block if there is a genesis block already present in the chain
+                        new Block(starRegister)
+                        // simple timeout to manage asynchronous activity
+                        setTimeout(() => res.send(chain[chain.length-1]), 1000)
+
+                        addr = "" // reset address after star is registered
+                    }
+            })
+        }else{
+            res.send("Address is not verified! Check again.")
+        } 
+    }       
 })
 
 // http GET request for getting blocks
