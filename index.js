@@ -7,6 +7,9 @@ const level = require('level');
 const bitcoin = require('bitcoinjs-lib')
 const bitcoinMessage = require('bitcoinjs-message')
 
+// used to convert hex to ASCII
+const hex2ascii = require('hex2ascii')
+
 //To store Chain data..
 const chainDB = './chaindata';
 const db = level(chainDB, {valueEncoding: 'json'});
@@ -21,16 +24,22 @@ let chain = []
 // array to view the entire chain when request is made
 let blockChain = []
 
-// addr stores address
-var addr = ""
-
 // response is used to facilitate request validation
 var response;
 
 // temporary variables to check window timeout
-var check = false
+var check = []
 var messageSignature
-var loopCheck = false
+var duplicate = false
+var i = 0
+var timer = []
+
+// holder stores address and it's corresponding data
+var holder = []
+// verifiedHolder stores the verified address and it's corresponding data
+var verifiedHolder = []
+// a temp variable
+var reqBlock
 
 // for using json in http POST request
 app.use(express.json())
@@ -135,39 +144,47 @@ app.post('/requestValidation', (req, res) => {
         res.status(400).send("Please input a valid data!")
         return
     }
-    if(loopCheck == false){// check if loop executed before timeout
-        addr = addressInput.address
+
+    for(var j=0; j<holder.length; j++){
+        if(holder[j].address == req.body.address){// checks a duplicate request    
+            duplicate = true
+            console.log(duplicate)
+            break
+        }
+    }
+
+    if(!duplicate){
 
         response = {
-            "address":addr,
+            "address":addressInput.address,
             "requestTimeStamp":new Date().getTime().toString().slice(0,-3),
-            "message":`${addr}:${new Date().getTime().toString().slice(0,-3)}:starRegistery`,
+            "message":`${addressInput.address}:${new Date().getTime().toString().slice(0,-3)}:starRegistery`,
             "validationWindow":"300"
         }
+
+        holder.push(response)
+        duplicate = false
+
+        check[i] = false
+        timer[i] = setTimeout(() => { if(check[i] == false){ // check if address already verified
+                                        holder.splice(i,1)} }, 300000)   
+        i = i+1     
         
         res.send(response)
+        return
 
-    }else{
+    }else if(duplicate){
 
         var repeatResponse = {
-            "address":response.address,
-            "requestTimeStamp":response.requestTimeStamp,
-            "message":response.message,
-            "validationWindow":300 - (new Date().getTime().toString().slice(0,-3)-response.requestTimeStamp)
+            "address":holder[j].address,
+            "requestTimeStamp":holder[j].requestTimeStamp,
+            "message":holder[j].message,
+            "validationWindow":300 - (new Date().getTime().toString().slice(0,-3)-holder[j].requestTimeStamp)
         }
+        duplicate=false
         res.send(repeatResponse)
-    }
-    
-    if(loopCheck == false){// check if previous timeout is complete
-        loopCheck = true
-        setTimeout(() => 
-                {// validationWindow for 5 minutes
-                    if(!check)
-                        addr="null"     
-                    loopCheck = false}
-                , 300000)
-    }
-     
+        return
+    }     
 })
 
 // http POST request for signature validation
@@ -177,109 +194,117 @@ app.post('/message-signature/validate', (req,res) => {
         signature:req.body.signature
     }
 
-    if(addr == ""){// check whether request sent
+    if(holder.length == 0){// check whether request sent
         res.send("Send a request first!")
         return
-    }else if(addr == "null"){// check whether time expired
-        res.send("Timeout! Restart the process.")
-        return
-    }else if(!req.body.address || !req.body.signature){// check if there is a input
+    }
+    if(!req.body.address || !req.body.signature){// check if there is a input
         res.send("Please input both address & signature to verify!")
         return
-    }else if(payload.address == addr){// check if address matches with the request placed
-        var status = bitcoinMessage.verify(response['message'],addr,payload.signature)// verification process
-        if(status){
-            messageSignature = 'valid'
-            check = true 
-            loopCheck = false
-        }else{
-            messageSignature = 'Invalid'
-            loopCheck = false
-        }
+    }
 
-        var verify = {
-            "registerStar": status,
-            "status": {
-                        "address": addr,
-                        "requestTimeStamp": response['requestTimeStamp'],
-                        "message": response['message'],
-                        "validationWindow": 300 - (new Date().getTime().toString().slice(0,-3) - response['requestTimeStamp']),
-                        "messageSignature": messageSignature
+    for(var z = 0; z<holder.length; z++){
+        if(req.body.address == holder[z].address){// check whether time expired
+            var status = bitcoinMessage.verify(holder[z].message,payload.address,payload.signature)// verification process
+            if(status){
+                messageSignature = 'valid'
+                verifiedHolder.push(holder[z])
+            }else{
+                messageSignature = 'Invalid'
+            }
+
+            var verify = {
+                "registerStar": status,
+                "status": {
+                            "address": holder[z].address,
+                            "requestTimeStamp": holder[z].requestTimeStamp,
+                            "message": holder[z].message,
+                            "validationWindow": 300 - (new Date().getTime().toString().slice(0,-3) - holder[z].requestTimeStamp),
+                            "messageSignature": messageSignature
+                            }
                         }
-                    }
-        res.send(verify)
-        return
-    }else{
-        res.send("Address does not match with the address provided during request!")
+            
+            holder.splice(z,1) //remove address from mempool
+            res.send(verify)
+            return
+        }else if(z == holder.length-1 && req.body.address!=holder[z].address){
+            console.log(holder)
+            res.send("Address not registered/time is expired! Restart the process.")
+            return 
+
+        }
     }
 })
 
 // http POST request to register a star
 app.post('/block', (req, res) => {
     
-    // asusual check
-    if(addr == ""){
-        res.send("Send a request first!")
+    const starData = {
+        address:req.body.address,
+        star:{
+            dec:req.body.star.dec,
+            ra:req.body.star.ra,
+            story:req.body.star.story
+            }
+        }
+
+    if(!req.body.address || !req.body.star.dec || !req.body.star.ra || !req.body.star.story){
+        res.status(400).send("Please input a valid data!")
         return
-    }else if(addr == "null"){
-        res.send("Timeout! Restart the process.")
+    }else if(starData.star.story.includes('!') || starData.star.story.includes('@') || starData.star.story.includes('#') || starData.star.story.includes('$')){
+        res.send("Do not include special characters!")
         return
-    }else if(messageSignature == 'Invalid'){
-        res.send("Your signature submitted was invalid!")
+    }else if(req.body.star.story.length > 500){
+        res.send("Input limit exceeded for Story! Input less than 250 words/500 characters.")
         return
-    }else{
-    
-        const starData = {
-            address:req.body.address,
-            star:{
-                dec:req.body.star.dec,
-                ra:req.body.star.ra,
-                story:req.body.star.story
+    }else if(verifiedHolder.length == 0){// check if there are verified addresses in the mempool
+        res.send("Signature not yet verified!")
+        return
+    }
+
+    for(var y=0; y<verifiedHolder.length; y++){
+
+        if(req.body.address == verifiedHolder[y].address){ // check if address is in verified mempool
+            var storyEncode = new Buffer(req.body.star.story).toString('hex')
+            var starRegister = {
+                address:starData.address,
+                star:{
+                    dec:starData.star.dec,
+                    ra:starData.star.ra,
+                    story:storyEncode,
+                    }
                 }
-            }
-        
-        if(!req.body.address || !req.body.star.dec || !req.body.star.ra || !req.body.star.story){
-            res.status(400).send("Please input a valid data!")
-            return
-        }else if(req.body.star.story.length > 500){
-            res.send("Input limit exceeded for Story! Input less than 250 words/500 characters.")
-        }
-
-        var storyEncode = new Buffer(req.body.star.story).toString('hex')
-        var starRegister = {
-            address:starData.address,
-            star:{
-                dec:starData.star.dec,
-                ra:starData.star.ra,
-                story:storyEncode,
-                storyDecoded:starData.star.story
-            }
-        }
-
-        if(req.body.address == addr){
-            // get key from db2 
+                // get key from db2 
             db2.get('key', function(err, value){
-            // check if there is a genesis block
+                // check if there is a genesis block
                 if(!value){
                     new Block(starRegister)
                     setTimeout(() => {new Block(starRegister)}, 1000)
-                            
-                    setTimeout(() => {res.send(chain[chain.length-1])}, 2000)
-
-                    addr = "" // reset address after star is registered
+                                
+                    setTimeout(() => {
+                        res.send(chain[chain.length-1])
+                        return}, 2000)
+                        
+                    check[y] = true
+                    verifiedHolder.splice(y,1) // remove address from verified mempool
                     }else{
                         // adding new block if there is a genesis block already present in the chain
                         new Block(starRegister)
                         // simple timeout to manage asynchronous activity
-                        setTimeout(() => res.send(chain[chain.length-1]), 1000)
-
-                        addr = "" // reset address after star is registered
+                        setTimeout(() => {
+                            res.send(chain[chain.length-1])
+                            return}, 1000)
+                            
+                        check[y] = true
+                        verifiedHolder.splice(y,1) // remove address from verified mempool
                     }
             })
-        }else{
-            res.send("Address is not verified! Check again.")
-        } 
-    }       
+            break
+        }else if(y == verifiedHolder.length-1 && req.body.address != verifiedHolder[y].address){
+            res.send("Either there is no request sent/submitted signature is invalid!")
+            return
+        }
+    } 
 })
 
 // http GET request for getting blocks
@@ -291,7 +316,27 @@ app.get('/block/:height', (req,res) => {
             return
         }else{
             db.get(req.params.height, function(err, value){
-                res.send(value)
+                if(req.params.height == 0){
+                    res.send(value) // check if height is the height of genesis block
+                    return
+                }else{
+                    reqBlock = {
+                        "hash": value.hash,
+                        "height": value.height,
+                        "body": {
+                            "address": value.body.address,
+                            "star": {
+                                "dec": value.body.star.dec,
+                                "ra": value.body.star.ra,
+                                "story": value.body.star.story,
+                                "storyDecoded":hex2ascii(value.body.star.story)
+                            }
+                        },
+                        "time": value.time,
+                        "previousBlockHash": value.previousBlockHash
+                    }
+                    res.send(reqBlock)
+                }
             })
         }
     })
@@ -307,13 +352,34 @@ app.get('/stars/address:address', (req, res) => {
             db.createKeyStream()
                 .on('data', function (data) {
                     db.get(data, function(err, value){
-                        if(value.body['address'] == str.substring(1))// substring(1) removes the : from string 
-                            Blockchain(value)
+                        if(value.body['address'] == str.substring(1)){// substring(1) removes the : from string 
+                            reqBlock = {
+                                "hash": value.hash,
+                                "height": value.height,
+                                "body": {
+                                    "address": value.body.address,
+                                    "star": {
+                                        "dec": value.body.star.dec,
+                                        "ra": value.body.star.ra,
+                                        "story": value.body.star.story,
+                                        "storyDecoded":hex2ascii(value.body.star.story)// decoded back to ASCII
+                                    }
+                                },
+                                "time": value.time,
+                                "previousBlockHash": value.previousBlockHash
+                            }
+                            Blockchain(reqBlock) 
+                        }
                     })
                 })
             setTimeout(() => {
-                res.send(blockChain)
-                blockChain = []}, 2000)    
+                if(blockChain.length!=0){
+                    res.send(blockChain)
+                    blockChain = []
+                    return
+                }else{
+                    res.send("No data associated with that address!")
+                }}, 2000)    
         }
     })
 })
@@ -328,14 +394,39 @@ app.get('/stars/hash:h', (req, res) => {
             db.createKeyStream()
                 .on('data', function (data) {
                     db.get(data, function(err, value){
-                        console.log(str)
-                        if(value.hash == str.substring(1)) 
-                            Blockchain(value)
+                       
+                        if(value.hash == str.substring(1)){ // check if hash matches
+
+                            reqBlock = {
+                                "hash": value.hash,
+                                "height": value.height,
+                                "body": {
+                                    "address": value.body.address,
+                                    "star": {
+                                        "dec": value.body.star.dec,
+                                        "ra": value.body.star.ra,
+                                        "story": value.body.star.story,
+                                        "storyDecoded":hex2ascii(value.body.star.story)// decoded back to ASCII
+                                    }
+                                },
+                                "time": value.time,
+                                "previousBlockHash": value.previousBlockHash
+                            }
+
+                            Blockchain(reqBlock)
+                        }
                     })
                 })
+
             setTimeout(() => {
-                res.send(blockChain)
-                blockChain = []}, 2000)    
+                if(blockChain.length != 0){
+                    res.send(blockChain)
+                    blockChain = []
+                    return
+                }else{
+                    res.send("No data associated with that hash!")
+                    return
+                }}, 2000)    
         }
     })
 })
