@@ -9,6 +9,7 @@ This project is built on private blockchain that is used as a star notary servic
 * [levelDb](http://leveldb.org/) - Database to persist data.
 * [bitcoinjs-lib](https://www.npmjs.com/package/bitcoinjs-lib) - A javascript Bitcoin library for node.js and browsers.
 * [bitcoinjs-message](https://www.npmjs.com/package/bitcoinjs-message) - To sign and verify messages.
+* [hex2ascii](https://www.npmjs.com/package/hex2ascii) - To convert hex to ASCII.
 
 ## Installation
 Install the required dependencies using [npm](https://www.npmjs.com/) package manager.
@@ -19,6 +20,7 @@ npm install crypto-js --save
 npm install level --save
 npm install bitcoinjs-lib --save
 npm install bitcoinjs-message --save
+npm install hex2ascii --save
 ```
 ## How to use?
 * Run the code using node.js.
